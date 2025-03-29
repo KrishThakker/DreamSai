@@ -87,7 +87,7 @@ def validate_phone_number(number):
     return clean_number
 
 def validate_excel_data(data):
-    """Validate Excel data structure and content"""
+    """Validate Excel data structure and content with logging"""
     errors = []
     warnings = []
     
