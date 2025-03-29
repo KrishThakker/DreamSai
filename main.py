@@ -9,6 +9,10 @@ from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 
 
 def main():
+    # Check if the Excel file exists before processing
+    if not exists('test.xlsx'):
+        print('\033[1;31;40mError: test.xlsx file not found. Please make sure the file exists in the current directory.\033[0m')
+        return
 
     if_final_exists = exists('all.txt')
 
