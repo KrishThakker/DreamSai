@@ -352,29 +352,134 @@ def cleanup_files(path, backup_dir, excluded_files):
         print(f'\033[1;31;40mError during cleanup: {str(e)}\033[0m')
         return False
 
-# Update main function to use logging
+def get_delivery_date(date_str: str = None) -> str:
+    """Get the delivery date, either from input or next Saturday"""
+    if date_str:
+        try:
+            date = pendulum.parse(date_str)
+            # Ensure the date is a Saturday
+            if date.day_of_week != pendulum.SATURDAY:
+                date = date.next(pendulum.SATURDAY)
+        except Exception:
+            logging.warning(f"Invalid date format: {date_str}. Using next Saturday.")
+            date = pendulum.now().next(pendulum.SATURDAY)
+    else:
+        date = pendulum.now()
+        if date.day_of_week == pendulum.SATURDAY:
+            if date.hour >= 12:  # After noon, use next Saturday
+                date = date.next(pendulum.SATURDAY)
+        else:
+            date = date.next(pendulum.SATURDAY)
+    
+    return date.strftime('%d/%m/%Y')
+
+class DeliveryManager:
+    """Manage deliveries and their organization"""
+    def __init__(self, config: dict):
+        self.config = config
+        self.deliveries_by_date = {}  # Dictionary to store deliveries by date
+        self.drivers_by_date = {}     # Dictionary to store drivers by date
+        self.processed_deliveries = 0
+        self.invalid_numbers = []
+        self.duplicate_deliveries = {}
+        self.processed_addresses = set()
+
+    def add_delivery(self, name: str, number: str, address: str, driver: str, date: str = None):
+        """Add a delivery to the manager"""
+        delivery_date = get_delivery_date(date)
+        
+        # Initialize date entries if they don't exist
+        if delivery_date not in self.deliveries_by_date:
+            self.deliveries_by_date[delivery_date] = []
+        if delivery_date not in self.drivers_by_date:
+            self.drivers_by_date[delivery_date] = {}
+
+        # Check for duplicate deliveries
+        delivery_key = f"{name.lower()}:{address.lower()}:{delivery_date}"
+        if delivery_key in self.processed_addresses:
+            self.duplicate_deliveries[name] = self.duplicate_deliveries.get(name, 1) + 1
+            logging.warning(f"Duplicate delivery found for {name} at {address} for {delivery_date}")
+            return False
+
+        self.processed_addresses.add(delivery_key)
+        
+        # Validate phone number
+        clean_number = validate_phone_number(number)
+        if not clean_number:
+            self.invalid_numbers.append((name, number))
+            logging.warning(f"Invalid phone number {number} for {name}")
+            return False
+
+        # Add delivery to the appropriate date
+        delivery = {
+            'name': name,
+            'number': clean_number,
+            'address': address,
+            'driver': driver
+        }
+        self.deliveries_by_date[delivery_date].append(delivery)
+        
+        # Update driver information
+        if driver not in self.drivers_by_date[delivery_date]:
+            self.drivers_by_date[delivery_date][driver] = []
+        self.drivers_by_date[delivery_date][driver].append(delivery)
+        
+        self.processed_deliveries += 1
+        return True
+
+    def generate_driver_files(self):
+        """Generate individual driver files for each date"""
+        for date, drivers in self.drivers_by_date.items():
+            for driver, deliveries in drivers.items():
+                filename = f"{driver}_{date.replace('/', '-')}.txt"
+                
+                # Create the driver's delivery text
+                delivery_text = ""
+                for delivery in deliveries:
+                    delivery_text += format_delivery_details(
+                        delivery['name'],
+                        delivery['number'],
+                        delivery['address']
+                    )
+                
+                # Write the complete letter
+                with open(filename, 'w') as f:
+                    f.write(format_driver_letter(driver, date, delivery_text))
+                logging.info(f"Generated delivery file for {driver} for {date}")
+
+    def generate_summary(self) -> str:
+        """Generate a detailed summary including date-specific information"""
+        summary = "\n============= Processing Summary =============\n"
+        summary += f"Total entries processed:     {self.processed_deliveries}\n"
+        summary += f"Invalid phone numbers:       {len(self.invalid_numbers)}\n"
+        summary += f"Duplicate deliveries:        {len(self.duplicate_deliveries)}\n\n"
+        
+        for date in sorted(self.deliveries_by_date.keys()):
+            deliveries = self.deliveries_by_date[date]
+            drivers = self.drivers_by_date[date]
+            summary += f"\nDate: {date}\n"
+            summary += f"  Total deliveries: {len(deliveries)}\n"
+            summary += f"  Number of drivers: {len(drivers)}\n"
+            summary += "  Drivers and their delivery counts:\n"
+            for driver, deliveries in drivers.items():
+                summary += f"    - {driver}: {len(deliveries)} deliveries\n"
+        
+        return summary + "\n=========================================\n"
+
+# Update the main function to use DeliveryManager
 def main():
     log_file = setup_logging()
     logging.info("Starting DreamSai delivery processing")
     
     try:
-        # Check if the Excel file exists before processing
-        excel_file = config['FILES']['excel_file']
-        if not exists(excel_file):
-            print(f'\033[1;31;40mError: {excel_file} file not found. Please make sure the file exists in the current directory.\033[0m')
+        # Initialize delivery manager
+        delivery_manager = DeliveryManager(config)
+        
+        # Process Excel file
+        if not process_excel_file(config['FILES']['excel_file']):
             return
 
-        if_final_exists = exists('all.txt')
-
-        if if_final_exists == True:
-            os.remove('all.txt')
-        text = open('all.txt', 'w')
-        
-        if_test_exists = exists('test_csv.csv')
-        if not if_test_exists:
-            if not process_excel_file(excel_file):
-                return
-
+        # Read and process deliveries
         with open('test_csv.csv', 'r') as file:
             csv_reader = reader(file)
             header = next(csv_reader)
@@ -384,70 +489,28 @@ def main():
                 file.seek(0)
                 next(csv_reader)
                 
-                print(f'\033[1;32;40mProcessing {total_lines} deliveries...\033[0m')
-                
-                # Track statistics
-                processed_deliveries = 0
-                invalid_numbers = []
-                duplicate_deliveries = {}
-                processed_addresses = set()
+                logging.info(f"Processing {total_lines} deliveries...")
                 
                 for line_num, line in enumerate(csv_reader, 1):
-                    name = line[0]
-                    raw_number = line[1]
-                    address = line[2]
+                    delivery_manager.add_delivery(
+                        name=line[0],
+                        number=line[1],
+                        address=line[2],
+                        driver=line[3],
+                        date=line[5] if len(line) > 5 else None  # Optional date column
+                    )
                     
-                    # Check for duplicate deliveries
-                    delivery_key = f"{name.lower()}:{address.lower()}"
-                    if delivery_key in processed_addresses:
-                        duplicate_deliveries[name] = duplicate_deliveries.get(name, 1) + 1
-                        print(f'\033[1;33;40mWarning: Duplicate delivery found for {name} at {address}\033[0m')
-                        continue
-                    
-                    processed_addresses.add(delivery_key)
-                    
-                    number = validate_phone_number(raw_number)
-                    if not number:
-                        invalid_numbers.append((name, raw_number))
-                        print(f'\033[1;33;40mWarning: Invalid phone number {raw_number} for {name}\033[0m')
-                        continue
-                    
-                    person = line[3]
-                    person_file = (person+'.txt')
-
-                    to_write = format_delivery_details(name, number, address)
-
-                    with open('all.txt', 'a') as text:
-                        text.write(to_write + '\n')
-
-                    person_file_exists = exists(person_file)
-                    if person_file_exists == True:
-                        with open(person_file, 'a') as pfile:
-                            pfile.write(to_write)
-                    else:
-                        with open(person_file, 'x') as pfile:
-                            day = (pendulum.today()).strftime('%A')
-                            if day == 'Saturday':
-                                date = (pendulum.today()).strftime('%d/%m/%Y')
-                            else:
-                                date = pendulum.now().next(pendulum.SATURDAY).strftime('%d/%m/%Y')
-                            
-                            pfile.write(format_driver_letter(person, date, to_write))
-
-                    processed_deliveries += 1
-                    
-                    # Show progress
                     if line_num % 5 == 0:
-                        print(f'\033[1;32;40mProcessed {line_num}/{total_lines} deliveries\033[0m')
-                
-                # Print summary report
-                summary = generate_summary_report(total_lines, processed_deliveries, invalid_numbers, duplicate_deliveries)
-                print('\033[1;32;40m' + summary + '\033[0m')
-                
-                # Save summary to file
-                with open('processing_summary.txt', 'w') as summary_file:
-                    summary_file.write(summary)
-                print('\033[1;32;40mSummary saved to processing_summary.txt\033[0m')
+                        logging.info(f"Processed {line_num}/{total_lines} deliveries")
+
+        # Generate driver files
+        delivery_manager.generate_driver_files()
+        
+        # Generate and save summary
+        summary = delivery_manager.generate_summary()
+        logging.info(summary)
+        with open('processing_summary.txt', 'w') as f:
+            f.write(summary)
 
         # Process driver information
         dname_list, dnumber_list = process_driver_list('test_csv.csv')
