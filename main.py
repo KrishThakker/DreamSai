@@ -214,6 +214,72 @@ def send_whatsapp_messages(dname_list, dnumber_list, config):
     
     return success_count == len(dname_list)
 
+def process_driver_list(csv_file):
+    """Process the CSV file to extract driver information"""
+    dname_list = []
+    dnumber_list = []
+    
+    print('\033[1;32;40mProcessing driver information...\033[0m')
+    
+    try:
+        with open(csv_file, 'r') as file:
+            csv_reader = reader(file)
+            header = next(csv_reader)
+            if header != None:
+                for line in csv_reader:
+                    dname = line[3]
+                    raw_dnumber = line[4]
+                    dnumber = validate_phone_number(raw_dnumber)
+                    if not dnumber:
+                        print(f'\033[1;33;40mWarning: Invalid driver phone number {raw_dnumber} for {dname}\033[0m')
+                        continue
+                    
+                    dnumber = '44' + dnumber[1:]  # Convert to international format
+                    
+                    if dname not in dname_list:
+                        dname_list.append(dname)
+                        dnumber_list.append(dnumber)
+        
+        print(f'\033[1;32;40mFound {len(dname_list)} unique drivers\033[0m')
+        return dname_list, dnumber_list
+        
+    except Exception as e:
+        print(f'\033[1;31;40mError processing driver information: {str(e)}\033[0m')
+        return [], []
+
+def cleanup_files(path, backup_dir, excluded_files):
+    """Clean up generated files and create backups"""
+    try:
+        # Remove CSV file
+        if exists('test_csv.csv'):
+            os.remove('test_csv.csv')
+        
+        # Create backup directory
+        if not exists(backup_dir):
+            os.makedirs(backup_dir)
+            print(f'\033[1;32;40mCreating backup directory: {backup_dir}\033[0m')
+
+        # Get list of files to be deleted
+        files_to_process = [f for f in os.listdir(path) 
+                          if f not in excluded_files and f != 'backups']
+
+        # Backup and delete files
+        for filename in files_to_process:
+            fpath = path + filename
+            backup_path = backup_dir + '/' + filename
+            try:
+                with open(fpath, 'r') as src_file, open(backup_path, 'w') as backup_file:
+                    backup_file.write(src_file.read())
+                print(f'\033[1;32;40mBacked up: {filename}\033[0m')
+                os.remove(fpath)
+            except Exception as e:
+                print(f'\033[1;31;40mFailed to process {filename}: {str(e)}\033[0m')
+
+        return True
+    except Exception as e:
+        print(f'\033[1;31;40mError during cleanup: {str(e)}\033[0m')
+        return False
+
 def main():
     # Check if the Excel file exists before processing
     excel_file = config['FILES']['excel_file']
@@ -306,65 +372,24 @@ def main():
                 summary_file.write(summary)
             print('\033[1;32;40mSummary saved to processing_summary.txt\033[0m')
 
-    # Replace the WhatsApp messaging section with:
+    # Process driver information
+    dname_list, dnumber_list = process_driver_list('test_csv.csv')
+
+    # Send WhatsApp messages if there are drivers
     if dname_list:
         send_whatsapp_messages(dname_list, dnumber_list, config)
     else:
         print('\033[1;33;40mNo drivers to message\033[0m')
 
-# Edit Path 
-path = '/Users/krish/Documents/DreamSai/'
-# Edit Path ^
+    # Cleanup and backup files
+    backup_dir = path + 'backups/' + pendulum.now().format('YYYY-MM-DD_HH-mm-ss')
+    if cleanup_files(path, backup_dir, excluded_files):
+        print('\033[1;32;40mCleanup completed successfully\033[0m')
+    else:
+        print('\033[1;31;40mCleanup encountered some errors\033[0m')
 
-main()
+    print('\033[1;32;40mDone!\033[0m')
 
-print('\033[1;32;40mReading Excel File...\n')
-
-dname_list = []
-dnumber_list = []
-            
-with open('test_csv.csv', 'r') as file:
-    csv_reader = reader(file)
-    header = next(csv_reader)
-    if header != None:
-        for line in csv_reader:
-            dname = line[3]
-            raw_dnumber = line[4]
-            dnumber = validate_phone_number(raw_dnumber)
-            if not dnumber:
-                print(f'\033[1;33;40mWarning: Invalid driver phone number {raw_dnumber} for {dname}\033[0m')
-                continue
-                
-            dnumber = '44' + dnumber[1:]  # Convert to international format
-            
-            if dname not in dname_list:
-                dname_list.append(dname)
-                dnumber_list.append(dnumber)
-
-# Create a backup directory for the generated files
-backup_dir = path + 'backups/' + pendulum.now().format('YYYY-MM-DD_HH-mm-ss')
-if not exists(backup_dir):
-    os.makedirs(backup_dir)
-    print(f'\033[1;32;40mCreating backup directory: {backup_dir}\033[0m')
-
-# Get list of files to be deleted
-list = os.listdir(path)
-for file in excluded_files:
-    if file in list:
-        list.remove(file)
-if 'backups' in list:
-    list.remove('backups')
-
-# Backup files before deletion
-for i in list:
-    fpath = path + i
-    backup_path = backup_dir + '/' + i
-    try:
-        with open(fpath, 'r') as src_file, open(backup_path, 'w') as backup_file:
-            backup_file.write(src_file.read())
-        print(f'\033[1;32;40mBacked up: {i}\033[0m')
-    except Exception as e:
-        print(f'\033[1;31;40mFailed to backup {i}: {str(e)}\033[0m')
-    os.remove(fpath)
-
-print('\033[1;32;40mDone!')
+# Remove the duplicate code after main()
+if __name__ == "__main__":
+    main()
