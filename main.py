@@ -121,8 +121,15 @@ for i in dname_list:
         response = session.post(URL, json=parameters)
         data = json.loads(response.text)
         print('\033[1;32;40mSending Message to '+i+'...\n')
+        
+        # Add status check for the API response
+        if response.status_code != 200:
+            print(f'\033[1;31;40mError sending message to {i}. Status code: {response.status_code}')
+            print(f'Response: {data}\033[0m')
     except (ConnectionError, Timeout, TooManyRedirects) as e:
-        print('Error:\n\n'+e)
+        print('\033[1;31;40mConnection Error:\n\n'+str(e)+'\033[0m')
+    except Exception as e:
+        print(f'\033[1;31;40mUnexpected error sending message to {i}:\n{str(e)}\033[0m')
 
     
 os.remove('test_csv.csv')
