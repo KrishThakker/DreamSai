@@ -104,6 +104,22 @@ def process_excel_file(excel_file):
         print(f'\033[1;31;40mError processing Excel file: {str(e)}\033[0m')
         return None
 
+def generate_summary_report(total_deliveries, processed_deliveries, invalid_numbers, duplicate_deliveries):
+    """Generate a summary report of the processing"""
+    return (
+        '\n============= Processing Summary =============\n'
+        f'Total entries processed:     {total_deliveries}\n'
+        f'Successful deliveries:       {processed_deliveries}\n'
+        f'Invalid phone numbers:       {len(invalid_numbers)}\n'
+        f'Duplicate deliveries:        {len(duplicate_deliveries)}\n'
+        '-------------------------------------------\n'
+        f'Success rate:                {(processed_deliveries/total_deliveries)*100:.1f}%\n'
+        '\nDetails:\n'
+        + ('\nInvalid phone numbers:\n' + '\n'.join(f'- {name}: {number}' for name, number in invalid_numbers) if invalid_numbers else '')
+        + ('\nDuplicate deliveries:\n' + '\n'.join(f'- {name} ({count} times)' for name, count in duplicate_deliveries.items()) if duplicate_deliveries else '')
+        + '\n===========================================\n'
+    )
+
 def main():
     # Check if the Excel file exists before processing
     excel_file = config['FILES']['excel_file']
@@ -127,21 +143,38 @@ def main():
         header = next(csv_reader)
         
         if header != None:
-            total_lines = sum(1 for _ in file)  # Count total lines
-            file.seek(0)  # Reset file pointer
-            next(csv_reader)  # Skip header again
+            total_lines = sum(1 for _ in file)
+            file.seek(0)
+            next(csv_reader)
             
             print(f'\033[1;32;40mProcessing {total_lines} deliveries...\033[0m')
+            
+            # Track statistics
+            processed_deliveries = 0
+            invalid_numbers = []
+            duplicate_deliveries = {}
+            processed_addresses = set()
             
             for line_num, line in enumerate(csv_reader, 1):
                 name = line[0]
                 raw_number = line[1]
+                address = line[2]
+                
+                # Check for duplicate deliveries
+                delivery_key = f"{name.lower()}:{address.lower()}"
+                if delivery_key in processed_addresses:
+                    duplicate_deliveries[name] = duplicate_deliveries.get(name, 1) + 1
+                    print(f'\033[1;33;40mWarning: Duplicate delivery found for {name} at {address}\033[0m')
+                    continue
+                
+                processed_addresses.add(delivery_key)
+                
                 number = validate_phone_number(raw_number)
                 if not number:
+                    invalid_numbers.append((name, raw_number))
                     print(f'\033[1;33;40mWarning: Invalid phone number {raw_number} for {name}\033[0m')
                     continue
-                    
-                address = line[2]
+                
                 person = line[3]
                 person_file = (person+'.txt')
 
@@ -164,9 +197,20 @@ def main():
                         
                         pfile.write(format_driver_letter(person, date, to_write))
 
+                processed_deliveries += 1
+                
                 # Show progress
-                if line_num % 5 == 0:  # Show progress every 5 items
+                if line_num % 5 == 0:
                     print(f'\033[1;32;40mProcessed {line_num}/{total_lines} deliveries\033[0m')
+            
+            # Print summary report
+            summary = generate_summary_report(total_lines, processed_deliveries, invalid_numbers, duplicate_deliveries)
+            print('\033[1;32;40m' + summary + '\033[0m')
+            
+            # Save summary to file
+            with open('processing_summary.txt', 'w') as summary_file:
+                summary_file.write(summary)
+            print('\033[1;32;40mSummary saved to processing_summary.txt\033[0m')
 
 # Edit Path 
 path = '/Users/krish/Documents/DreamSai/'
