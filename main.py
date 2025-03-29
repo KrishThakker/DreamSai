@@ -7,6 +7,10 @@ from requests import Session
 import json
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import configparser
+import logging
+from datetime import datetime
+from time import sleep
+from typing import List, Tuple, Dict
 
 # Load configuration from config file
 def load_config():
@@ -153,64 +157,132 @@ def generate_summary_report(total_deliveries, processed_deliveries, invalid_numb
         + '\n===========================================\n'
     )
 
-def send_whatsapp_messages(dname_list, dnumber_list, config):
-    """Send WhatsApp messages to drivers"""
-    success_count = 0
-    failed_messages = []
+# Add logging configuration
+def setup_logging():
+    """Configure logging for the application"""
+    log_file = f'logs/dreamsai_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    os.makedirs('logs', exist_ok=True)
     
-    for i in dname_list:
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    return log_file
+
+class WhatsAppMessenger:
+    """Handle WhatsApp message sending with retries"""
+    def __init__(self, config: dict, max_retries: int = 3, retry_delay: int = 5):
+        self.config = config
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.success_count = 0
+        self.failed_messages = []
+        
+        self.base_url = 'https://graph.facebook.com/'
+        self.api_version = config['WHATSAPP']['api_version'] + '/'
+        self.sender = config['WHATSAPP']['sender_id'] + '/'
+        self.endpoint = 'messages'
+        self.url = self.base_url + self.api_version + self.sender + self.endpoint
+        self.api_token = config['WHATSAPP']['api_token']
+        
+        self.session = Session()
+        self.session.headers.update({
+            'Authorization': f'Bearer {self.api_token}',
+            'Content-Type': 'application/json'
+        })
+
+    def send_message(self, driver_name: str, phone_number: str, message: str) -> bool:
+        """Send a WhatsApp message with retries"""
+        for attempt in range(self.max_retries):
+            try:
+                logging.info(f"Sending message to {driver_name} (Attempt {attempt + 1}/{self.max_retries})")
+                
+                parameters = {
+                    'messaging_product': 'whatsapp',
+                    'recipient_type': 'individual',
+                    'to': phone_number,
+                    'type': 'text',
+                    'text': {'body': message}
+                }
+                
+                response = self.session.post(self.url, json=parameters)
+                data = json.loads(response.text)
+                
+                if response.status_code == 200:
+                    self.success_count += 1
+                    logging.info(f"Successfully sent message to {driver_name}")
+                    return True
+                    
+                logging.warning(f"Failed to send message to {driver_name}. Status: {response.status_code}")
+                if attempt < self.max_retries - 1:
+                    logging.info(f"Retrying in {self.retry_delay} seconds...")
+                    sleep(self.retry_delay)
+                    
+            except Exception as e:
+                logging.error(f"Error sending message to {driver_name}: {str(e)}")
+                if attempt < self.max_retries - 1:
+                    sleep(self.retry_delay)
+        
+        self.failed_messages.append((driver_name, phone_number, "Max retries exceeded"))
+        return False
+
+    def get_results(self) -> Tuple[int, List[Tuple]]:
+        """Return the results of message sending"""
+        return self.success_count, self.failed_messages
+
+def retry_failed_messages(messenger: WhatsAppMessenger, failed_messages: List[Tuple]) -> None:
+    """Retry sending failed messages"""
+    if not failed_messages:
+        return
+    
+    logging.info("Retrying failed messages...")
+    retry_count = 0
+    
+    for driver_name, phone_number, _ in failed_messages:
         try:
-            dname_file = i + '.txt'
-            with open(dname_file, 'r') as df:
-                msg = df.read()
-
-            BASE_URL = 'https://graph.facebook.com/'
-            API_VERSION = config['WHATSAPP']['api_version'] + '/'
-            SENDER = config['WHATSAPP']['sender_id'] + '/'
-            ENDPOINT = 'messages'
-            URL = BASE_URL + API_VERSION + SENDER + ENDPOINT
-            API_TOKEN = config['WHATSAPP']['api_token']
-            TO = dnumber_list[dname_list.index(i)]
-
-            headers = {
-                'Authorization': f'Bearer {API_TOKEN}',
-                'Content-Type': 'application/json'
-            }
-            parameters = {
-                'messaging_product': 'whatsapp',
-                'recipient_type': 'individual',
-                'to': TO,
-                'type': 'text',
-                'text': {'body': msg}
-            }
+            with open(f"{driver_name}.txt", 'r') as f:
+                message = f.read()
             
-            session = Session()
-            session.headers.update(headers)
-            
-            print(f'\033[1;32;40mSending message to {i}...\033[0m')
-            response = session.post(URL, json=parameters)
-            data = json.loads(response.text)
-            
-            if response.status_code == 200:
-                success_count += 1
-                print(f'\033[1;32;40mMessage sent successfully to {i}\033[0m')
-            else:
-                failed_messages.append((i, response.status_code, data))
-                print(f'\033[1;31;40mFailed to send message to {i}. Status code: {response.status_code}\033[0m')
+            if messenger.send_message(driver_name, phone_number, message):
+                retry_count += 1
                 
         except Exception as e:
-            failed_messages.append((i, 'Exception', str(e)))
-            print(f'\033[1;31;40mError sending message to {i}: {str(e)}\033[0m')
+            logging.error(f"Error retrying message for {driver_name}: {str(e)}")
+    
+    logging.info(f"Successfully resent {retry_count}/{len(failed_messages)} failed messages")
+
+# Update the send_whatsapp_messages function
+def send_whatsapp_messages(dname_list: List[str], dnumber_list: List[str], config: dict) -> bool:
+    """Send WhatsApp messages to drivers using the new messenger class"""
+    messenger = WhatsAppMessenger(config)
+    
+    for name, number in zip(dname_list, dnumber_list):
+        try:
+            with open(f"{name}.txt", 'r') as f:
+                message = f.read()
+            messenger.send_message(name, number, message)
+        except Exception as e:
+            logging.error(f"Error processing message for {name}: {str(e)}")
+    
+    success_count, failed_messages = messenger.get_results()
     
     # Print messaging summary
-    print(f'\n\033[1;32;40mMessaging Summary:\n'
-          f'Successfully sent: {success_count}/{len(dname_list)} messages\n'
-          f'Failed messages: {len(failed_messages)}\033[0m')
+    logging.info(f"\nMessaging Summary:\n"
+                f"Successfully sent: {success_count}/{len(dname_list)} messages\n"
+                f"Failed messages: {len(failed_messages)}")
     
     if failed_messages:
-        print('\n\033[1;31;40mFailed Messages Details:')
-        for name, code, error in failed_messages:
-            print(f'- {name}: {code} - {error}\033[0m')
+        logging.warning("\nFailed Messages Details:")
+        for name, number, error in failed_messages:
+            logging.warning(f"- {name}: {error}")
+        
+        # Attempt to retry failed messages
+        retry_failed_messages(messenger, failed_messages)
     
     return success_count == len(dname_list)
 
@@ -280,115 +352,126 @@ def cleanup_files(path, backup_dir, excluded_files):
         print(f'\033[1;31;40mError during cleanup: {str(e)}\033[0m')
         return False
 
+# Update main function to use logging
 def main():
-    # Check if the Excel file exists before processing
-    excel_file = config['FILES']['excel_file']
-    if not exists(excel_file):
-        print(f'\033[1;31;40mError: {excel_file} file not found. Please make sure the file exists in the current directory.\033[0m')
-        return
-
-    if_final_exists = exists('all.txt')
-
-    if if_final_exists == True:
-        os.remove('all.txt')
-    text = open('all.txt', 'w')
+    log_file = setup_logging()
+    logging.info("Starting DreamSai delivery processing")
     
-    if_test_exists = exists('test_csv.csv')
-    if not if_test_exists:
-        if not process_excel_file(excel_file):
+    try:
+        # Check if the Excel file exists before processing
+        excel_file = config['FILES']['excel_file']
+        if not exists(excel_file):
+            print(f'\033[1;31;40mError: {excel_file} file not found. Please make sure the file exists in the current directory.\033[0m')
             return
 
-    with open('test_csv.csv', 'r') as file:
-        csv_reader = reader(file)
-        header = next(csv_reader)
+        if_final_exists = exists('all.txt')
+
+        if if_final_exists == True:
+            os.remove('all.txt')
+        text = open('all.txt', 'w')
         
-        if header != None:
-            total_lines = sum(1 for _ in file)
-            file.seek(0)
-            next(csv_reader)
+        if_test_exists = exists('test_csv.csv')
+        if not if_test_exists:
+            if not process_excel_file(excel_file):
+                return
+
+        with open('test_csv.csv', 'r') as file:
+            csv_reader = reader(file)
+            header = next(csv_reader)
             
-            print(f'\033[1;32;40mProcessing {total_lines} deliveries...\033[0m')
-            
-            # Track statistics
-            processed_deliveries = 0
-            invalid_numbers = []
-            duplicate_deliveries = {}
-            processed_addresses = set()
-            
-            for line_num, line in enumerate(csv_reader, 1):
-                name = line[0]
-                raw_number = line[1]
-                address = line[2]
+            if header != None:
+                total_lines = sum(1 for _ in file)
+                file.seek(0)
+                next(csv_reader)
                 
-                # Check for duplicate deliveries
-                delivery_key = f"{name.lower()}:{address.lower()}"
-                if delivery_key in processed_addresses:
-                    duplicate_deliveries[name] = duplicate_deliveries.get(name, 1) + 1
-                    print(f'\033[1;33;40mWarning: Duplicate delivery found for {name} at {address}\033[0m')
-                    continue
+                print(f'\033[1;32;40mProcessing {total_lines} deliveries...\033[0m')
                 
-                processed_addresses.add(delivery_key)
+                # Track statistics
+                processed_deliveries = 0
+                invalid_numbers = []
+                duplicate_deliveries = {}
+                processed_addresses = set()
                 
-                number = validate_phone_number(raw_number)
-                if not number:
-                    invalid_numbers.append((name, raw_number))
-                    print(f'\033[1;33;40mWarning: Invalid phone number {raw_number} for {name}\033[0m')
-                    continue
+                for line_num, line in enumerate(csv_reader, 1):
+                    name = line[0]
+                    raw_number = line[1]
+                    address = line[2]
+                    
+                    # Check for duplicate deliveries
+                    delivery_key = f"{name.lower()}:{address.lower()}"
+                    if delivery_key in processed_addresses:
+                        duplicate_deliveries[name] = duplicate_deliveries.get(name, 1) + 1
+                        print(f'\033[1;33;40mWarning: Duplicate delivery found for {name} at {address}\033[0m')
+                        continue
+                    
+                    processed_addresses.add(delivery_key)
+                    
+                    number = validate_phone_number(raw_number)
+                    if not number:
+                        invalid_numbers.append((name, raw_number))
+                        print(f'\033[1;33;40mWarning: Invalid phone number {raw_number} for {name}\033[0m')
+                        continue
+                    
+                    person = line[3]
+                    person_file = (person+'.txt')
+
+                    to_write = format_delivery_details(name, number, address)
+
+                    with open('all.txt', 'a') as text:
+                        text.write(to_write + '\n')
+
+                    person_file_exists = exists(person_file)
+                    if person_file_exists == True:
+                        with open(person_file, 'a') as pfile:
+                            pfile.write(to_write)
+                    else:
+                        with open(person_file, 'x') as pfile:
+                            day = (pendulum.today()).strftime('%A')
+                            if day == 'Saturday':
+                                date = (pendulum.today()).strftime('%d/%m/%Y')
+                            else:
+                                date = pendulum.now().next(pendulum.SATURDAY).strftime('%d/%m/%Y')
+                            
+                            pfile.write(format_driver_letter(person, date, to_write))
+
+                    processed_deliveries += 1
+                    
+                    # Show progress
+                    if line_num % 5 == 0:
+                        print(f'\033[1;32;40mProcessed {line_num}/{total_lines} deliveries\033[0m')
                 
-                person = line[3]
-                person_file = (person+'.txt')
-
-                to_write = format_delivery_details(name, number, address)
-
-                with open('all.txt', 'a') as text:
-                    text.write(to_write + '\n')
-
-                person_file_exists = exists(person_file)
-                if person_file_exists == True:
-                    with open(person_file, 'a') as pfile:
-                        pfile.write(to_write)
-                else:
-                    with open(person_file, 'x') as pfile:
-                        day = (pendulum.today()).strftime('%A')
-                        if day == 'Saturday':
-                            date = (pendulum.today()).strftime('%d/%m/%Y')
-                        else:
-                            date = pendulum.now().next(pendulum.SATURDAY).strftime('%d/%m/%Y')
-                        
-                        pfile.write(format_driver_letter(person, date, to_write))
-
-                processed_deliveries += 1
+                # Print summary report
+                summary = generate_summary_report(total_lines, processed_deliveries, invalid_numbers, duplicate_deliveries)
+                print('\033[1;32;40m' + summary + '\033[0m')
                 
-                # Show progress
-                if line_num % 5 == 0:
-                    print(f'\033[1;32;40mProcessed {line_num}/{total_lines} deliveries\033[0m')
-            
-            # Print summary report
-            summary = generate_summary_report(total_lines, processed_deliveries, invalid_numbers, duplicate_deliveries)
-            print('\033[1;32;40m' + summary + '\033[0m')
-            
-            # Save summary to file
-            with open('processing_summary.txt', 'w') as summary_file:
-                summary_file.write(summary)
-            print('\033[1;32;40mSummary saved to processing_summary.txt\033[0m')
+                # Save summary to file
+                with open('processing_summary.txt', 'w') as summary_file:
+                    summary_file.write(summary)
+                print('\033[1;32;40mSummary saved to processing_summary.txt\033[0m')
 
-    # Process driver information
-    dname_list, dnumber_list = process_driver_list('test_csv.csv')
+        # Process driver information
+        dname_list, dnumber_list = process_driver_list('test_csv.csv')
 
-    # Send WhatsApp messages if there are drivers
-    if dname_list:
-        send_whatsapp_messages(dname_list, dnumber_list, config)
-    else:
-        print('\033[1;33;40mNo drivers to message\033[0m')
+        # Send WhatsApp messages if there are drivers
+        if dname_list:
+            send_whatsapp_messages(dname_list, dnumber_list, config)
+        else:
+            print('\033[1;33;40mNo drivers to message\033[0m')
 
-    # Cleanup and backup files
-    backup_dir = path + 'backups/' + pendulum.now().format('YYYY-MM-DD_HH-mm-ss')
-    if cleanup_files(path, backup_dir, excluded_files):
-        print('\033[1;32;40mCleanup completed successfully\033[0m')
-    else:
-        print('\033[1;31;40mCleanup encountered some errors\033[0m')
+        # Cleanup and backup files
+        backup_dir = path + 'backups/' + pendulum.now().format('YYYY-MM-DD_HH-mm-ss')
+        if cleanup_files(path, backup_dir, excluded_files):
+            print('\033[1;32;40mCleanup completed successfully\033[0m')
+        else:
+            print('\033[1;31;40mCleanup encountered some errors\033[0m')
 
-    print('\033[1;32;40mDone!\033[0m')
+        print('\033[1;32;40mDone!\033[0m')
+        logging.info("Processing completed successfully")
+    except Exception as e:
+        logging.error(f"Fatal error: {str(e)}")
+        raise
+    finally:
+        logging.info(f"Log file saved to: {log_file}")
 
 # Remove the duplicate code after main()
 if __name__ == "__main__":
