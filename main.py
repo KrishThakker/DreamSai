@@ -66,7 +66,7 @@ def format_driver_letter(driver_name, date, deliveries):
         '============================================\n\n'
         'Important Notes:\n'
         '- Please confirm receipt of this message by replying to this message\n'
-        '- Contact us if you have any questions\n'
+        '- Contact us if you have any questions or need assistance\n'
         '- Drive safely!\n\n'
         'Best regards,\n'
         'DreamSai Team'
