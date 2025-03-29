@@ -69,7 +69,7 @@ def format_driver_letter(driver_name, date, deliveries):
         '- Contact us if you have any questions or need assistance\n'
         '- Drive safely!\n\n'
         'Best regards,\n'
-        'DreamSai Team'
+        'Krish, from the DreamSai team'
     )
 
 def validate_phone_number(number):
