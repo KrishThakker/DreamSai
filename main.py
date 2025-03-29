@@ -31,7 +31,7 @@ def load_config():
         
         with open(config_file, 'w') as f:
             config.write(f)
-        print('\033[1;32;40mDefault config.ini created. Please review and update as needed.\033[0m')
+        print('\033[1;32;40mDefault config.ini created. Please review and update as needed, and run the script again.\033[0m')
     
     config.read(config_file)
     return config
