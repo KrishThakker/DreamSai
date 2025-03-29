@@ -65,7 +65,7 @@ def format_driver_letter(driver_name, date, deliveries):
         f'{deliveries}\n'
         '============================================\n\n'
         'Important Notes:\n'
-        '- Please confirm receipt of this message\n'
+        '- Please confirm receipt of this message by replying to this message\n'
         '- Contact us if you have any questions\n'
         '- Drive safely!\n\n'
         'Best regards,\n'
