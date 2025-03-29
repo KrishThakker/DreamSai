@@ -6,12 +6,46 @@ import pendulum
 from requests import Session
 import json
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
+import configparser
 
+# Load configuration from config file
+def load_config():
+    config = configparser.ConfigParser()
+    config_file = 'config.ini'
+    
+    # Create default config if it doesn't exist
+    if not exists(config_file):
+        print('\033[1;33;40mConfig file not found. Creating default config.ini\033[0m')
+        config['PATHS'] = {
+            'working_directory': '/Users/krish/Documents/DreamSai/'
+        }
+        config['WHATSAPP'] = {
+            'api_version': 'v13.0',
+            'sender_id': '110575298428506',
+            'api_token': 'EAAGJasZAx3KMBAFdR6v3q403r08XyZBvmFg1sHr7DYoxZBsItZAKOJoLjBsuX8mqg1zlZBunamhHeN5A5JiWq9EJWhKekD94m4w6VAATkoBypoRPnj8c0FBMaDC1MoJYNoZAhZBFf1JZA2UX7b2jkr17GpFHGpPoDLAdfVZA3QJsZBAPuDZCxdCI1J9sOIM2wPjGjIe9kDhxrcA0gZDZD'
+        }
+        config['FILES'] = {
+            'excel_file': 'test.xlsx',
+            'excluded_files': 'requirements.txt,test.xlsx,main.py,instructions.txt,config.ini'
+        }
+        
+        with open(config_file, 'w') as f:
+            config.write(f)
+        print('\033[1;32;40mDefault config.ini created. Please review and update as needed.\033[0m')
+    
+    config.read(config_file)
+    return config
+
+# Load configuration
+config = load_config()
+path = config['PATHS']['working_directory']
+excluded_files = config['FILES']['excluded_files'].split(',')
 
 def main():
     # Check if the Excel file exists before processing
-    if not exists('test.xlsx'):
-        print('\033[1;31;40mError: test.xlsx file not found. Please make sure the file exists in the current directory.\033[0m')
+    excel_file = config['FILES']['excel_file']
+    if not exists(excel_file):
+        print(f'\033[1;31;40mError: {excel_file} file not found. Please make sure the file exists in the current directory.\033[0m')
         return
 
     if_final_exists = exists('all.txt')
@@ -24,7 +58,7 @@ def main():
     if if_test_exists == True:
         pass
     else:
-        xl = pd.read_excel('test.xlsx')
+        xl = pd.read_excel(excel_file)
         xl.to_csv(r'test_csv.csv', index = None, header = True)
 
     with open('test_csv.csv', 'r') as file:
@@ -95,13 +129,11 @@ for i in dname_list:
         msg = df.read()
 
     BASE_URL = 'https://graph.facebook.com/'
-    API_VERSION = 'v13.0/'
-    SENDER = '110575298428506/'
-    # Edit Sender Number ^
+    API_VERSION = config['WHATSAPP']['api_version'] + '/'
+    SENDER = config['WHATSAPP']['sender_id'] + '/'
     ENDPOINT = 'messages'
     URL = BASE_URL + API_VERSION + SENDER + ENDPOINT
-    API_TOKEN = 'EAAGJasZAx3KMBAFdR6v3q403r08XyZBvmFg1sHr7DYoxZBsItZAKOJoLjBsuX8mqg1zlZBunamhHeN5A5JiWq9EJWhKekD94m4w6VAATkoBypoRPnj8c0FBMaDC1MoJYNoZAhZBFf1JZA2UX7b2jkr17GpFHGpPoDLAdfVZA3QJsZBAPuDZCxdCI1J9sOIM2wPjGjIe9kDhxrcA0gZDZD'
-    # Edit API Token ^
+    API_TOKEN = config['WHATSAPP']['api_token']
     TO = dnumber_list[dname_list.index(i)]
 
     headers = {
@@ -142,10 +174,9 @@ if not exists(backup_dir):
 
 # Get list of files to be deleted
 list = os.listdir(path)
-list.remove('requirements.txt')
-list.remove('test.xlsx')
-list.remove('main.py')
-list.remove('instructions.txt')
+for file in excluded_files:
+    if file in list:
+        list.remove(file)
 if 'backups' in list:
     list.remove('backups')
 
