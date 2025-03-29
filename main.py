@@ -68,6 +68,42 @@ def format_driver_letter(driver_name, date, deliveries):
         'DreamSai Team'
     )
 
+def validate_phone_number(number):
+    """Validate and format phone numbers"""
+    # Remove any non-digit characters
+    clean_number = ''.join(filter(str.isdigit, str(number)))
+    
+    # Basic UK phone number validation
+    if len(clean_number) < 10 or len(clean_number) > 11:
+        return None
+    
+    # Format number to standard format
+    if len(clean_number) == 10:
+        clean_number = '0' + clean_number
+    return clean_number
+
+def process_excel_file(excel_file):
+    """Process Excel file with error handling"""
+    try:
+        print('\033[1;32;40mReading Excel file...\033[0m')
+        xl = pd.read_excel(excel_file)
+        
+        # Validate required columns
+        required_columns = ['Name', 'Phone', 'Address', 'Driver', 'Driver Phone']
+        missing_columns = [col for col in required_columns if col not in xl.columns]
+        if missing_columns:
+            print(f'\033[1;31;40mError: Missing required columns: {", ".join(missing_columns)}\033[0m')
+            return None
+            
+        # Convert to CSV with progress indicator
+        print('\033[1;32;40mConverting to CSV format...\033[0m')
+        xl.to_csv(r'test_csv.csv', index=None, header=True)
+        return True
+        
+    except Exception as e:
+        print(f'\033[1;31;40mError processing Excel file: {str(e)}\033[0m')
+        return None
+
 def main():
     # Check if the Excel file exists before processing
     excel_file = config['FILES']['excel_file']
@@ -82,20 +118,29 @@ def main():
     text = open('all.txt', 'w')
     
     if_test_exists = exists('test_csv.csv')
-    if if_test_exists == True:
-        pass
-    else:
-        xl = pd.read_excel(excel_file)
-        xl.to_csv(r'test_csv.csv', index = None, header = True)
+    if not if_test_exists:
+        if not process_excel_file(excel_file):
+            return
 
     with open('test_csv.csv', 'r') as file:
         csv_reader = reader(file)
         header = next(csv_reader)
         
         if header != None:
-            for line in csv_reader:
+            total_lines = sum(1 for _ in file)  # Count total lines
+            file.seek(0)  # Reset file pointer
+            next(csv_reader)  # Skip header again
+            
+            print(f'\033[1;32;40mProcessing {total_lines} deliveries...\033[0m')
+            
+            for line_num, line in enumerate(csv_reader, 1):
                 name = line[0]
-                number = '0'+str(line[1])
+                raw_number = line[1]
+                number = validate_phone_number(raw_number)
+                if not number:
+                    print(f'\033[1;33;40mWarning: Invalid phone number {raw_number} for {name}\033[0m')
+                    continue
+                    
                 address = line[2]
                 person = line[3]
                 person_file = (person+'.txt')
@@ -119,6 +164,10 @@ def main():
                         
                         pfile.write(format_driver_letter(person, date, to_write))
 
+                # Show progress
+                if line_num % 5 == 0:  # Show progress every 5 items
+                    print(f'\033[1;32;40mProcessed {line_num}/{total_lines} deliveries\033[0m')
+
 # Edit Path 
 path = '/Users/krish/Documents/DreamSai/'
 # Edit Path ^
@@ -136,15 +185,16 @@ with open('test_csv.csv', 'r') as file:
     if header != None:
         for line in csv_reader:
             dname = line[3]
-            dnumber = '44'+str(line[4])
-            if dname in dname_list:
-                pass
-            else:
-                dname_list.append(dname)
+            raw_dnumber = line[4]
+            dnumber = validate_phone_number(raw_dnumber)
+            if not dnumber:
+                print(f'\033[1;33;40mWarning: Invalid driver phone number {raw_dnumber} for {dname}\033[0m')
+                continue
+                
+            dnumber = '44' + dnumber[1:]  # Convert to international format
             
-            if dnumber in dnumber_list:
-                pass
-            else:
+            if dname not in dname_list:
+                dname_list.append(dname)
                 dnumber_list.append(dnumber)
 
 for i in dname_list:
