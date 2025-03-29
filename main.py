@@ -41,6 +41,33 @@ config = load_config()
 path = config['PATHS']['working_directory']
 excluded_files = config['FILES']['excluded_files'].split(',')
 
+def format_delivery_details(name, number, address):
+    return (
+        '----------------------------------------\n'
+        f'Delivery Details:\n'
+        f'  Name:         {name}\n'
+        f'  Phone Number: {number}\n'
+        f'  Address:      {address}\n'
+        '----------------------------------------\n'
+    )
+
+def format_driver_letter(driver_name, date, deliveries):
+    return (
+        f'Dear {driver_name},\n\n'
+        'On behalf of the DreamSai team, we sincerely thank you for your invaluable help\n'
+        'with deliveries this week. Your contribution means a great deal to us and our community.\n\n'
+        f'Your Delivery Schedule for Saturday {date}:\n\n'
+        '============================================\n\n'
+        f'{deliveries}\n'
+        '============================================\n\n'
+        'Important Notes:\n'
+        '- Please confirm receipt of this message\n'
+        '- Contact us if you have any questions\n'
+        '- Drive safely!\n\n'
+        'Best regards,\n'
+        'DreamSai Team'
+    )
+
 def main():
     # Check if the Excel file exists before processing
     excel_file = config['FILES']['excel_file']
@@ -73,10 +100,10 @@ def main():
                 person = line[3]
                 person_file = (person+'.txt')
 
-                to_write = ('\nName : '+name+'\nPhone Number : '+number+'\nAddress : '+address+'\n')
+                to_write = format_delivery_details(name, number, address)
 
                 with open('all.txt', 'a') as text:
-                    text.write(to_write)
+                    text.write(to_write + '\n')
 
                 person_file_exists = exists(person_file)
                 if person_file_exists == True:
@@ -89,10 +116,8 @@ def main():
                             date = (pendulum.today()).strftime('%d/%m/%Y')
                         else:
                             date = pendulum.now().next(pendulum.SATURDAY).strftime('%d/%m/%Y')
-
-                        pfile.write('Hi '+person+',\n\nOn behalf of the DreamSai team, I just wanted to thank you so much for helping with deliveries this week, it means so much and we really appreciate it.')
-                        pfile.write('\n\nBelow are your deliveries for this Saturday '+date+' :\n')
-                        pfile.write(to_write)
+                        
+                        pfile.write(format_driver_letter(person, date, to_write))
 
 # Edit Path 
 path = '/Users/krish/Documents/DreamSai/'
