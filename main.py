@@ -54,8 +54,8 @@ def format_delivery_details(name, number, address):
 def format_driver_letter(driver_name, date, deliveries):
     return (
         f'Dear {driver_name},\n\n'
-        'On behalf of the DreamSai team, we sincerely thank you for your invaluable help, thank you for your time and effort.\n'
-        'with deliveries this week. Your contribution means a great deal to us and our community.\n\n'
+        'On behalf of the DreamSai team, we sincerely thank you for your invaluable help, thank you for your time and effort. \n'
+        'We are grateful for your dedication and commitment to our cause. Your efforts are truly appreciated and make a significant impact on our community.\n\n'
         f'Your Delivery Schedule for Saturday {date}:\n\n'
         '============================================\n\n'
         f'{deliveries}\n'
