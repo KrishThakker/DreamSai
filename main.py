@@ -82,6 +82,35 @@ def validate_phone_number(number):
         clean_number = '0' + clean_number
     return clean_number
 
+def validate_excel_data(data):
+    """Validate Excel data structure and content"""
+    errors = []
+    warnings = []
+    
+    # Check for empty rows
+    empty_rows = data.index[data.isnull().all(1)].tolist()
+    if empty_rows:
+        warnings.append(f"Found {len(empty_rows)} empty rows that will be skipped")
+    
+    # Check for required fields
+    for idx, row in data.iterrows():
+        row_num = idx + 2  # Adding 2 to account for 0-based index and header row
+        if pd.isnull(row['Name']):
+            errors.append(f"Row {row_num}: Missing recipient name")
+        if pd.isnull(row['Address']):
+            errors.append(f"Row {row_num}: Missing address")
+        if pd.isnull(row['Driver']):
+            errors.append(f"Row {row_num}: Missing driver name")
+    
+    # Print validation results
+    if warnings:
+        print('\033[1;33;40m' + '\n'.join(warnings) + '\033[0m')
+    if errors:
+        print('\033[1;31;40mValidation Errors:\n' + '\n'.join(errors) + '\033[0m')
+        return False
+    
+    return True
+
 def process_excel_file(excel_file):
     """Process Excel file with error handling"""
     try:
@@ -93,6 +122,10 @@ def process_excel_file(excel_file):
         missing_columns = [col for col in required_columns if col not in xl.columns]
         if missing_columns:
             print(f'\033[1;31;40mError: Missing required columns: {", ".join(missing_columns)}\033[0m')
+            return None
+        
+        # Validate data content
+        if not validate_excel_data(xl):
             return None
             
         # Convert to CSV with progress indicator
@@ -119,6 +152,67 @@ def generate_summary_report(total_deliveries, processed_deliveries, invalid_numb
         + ('\nDuplicate deliveries:\n' + '\n'.join(f'- {name} ({count} times)' for name, count in duplicate_deliveries.items()) if duplicate_deliveries else '')
         + '\n===========================================\n'
     )
+
+def send_whatsapp_messages(dname_list, dnumber_list, config):
+    """Send WhatsApp messages to drivers"""
+    success_count = 0
+    failed_messages = []
+    
+    for i in dname_list:
+        try:
+            dname_file = i + '.txt'
+            with open(dname_file, 'r') as df:
+                msg = df.read()
+
+            BASE_URL = 'https://graph.facebook.com/'
+            API_VERSION = config['WHATSAPP']['api_version'] + '/'
+            SENDER = config['WHATSAPP']['sender_id'] + '/'
+            ENDPOINT = 'messages'
+            URL = BASE_URL + API_VERSION + SENDER + ENDPOINT
+            API_TOKEN = config['WHATSAPP']['api_token']
+            TO = dnumber_list[dname_list.index(i)]
+
+            headers = {
+                'Authorization': f'Bearer {API_TOKEN}',
+                'Content-Type': 'application/json'
+            }
+            parameters = {
+                'messaging_product': 'whatsapp',
+                'recipient_type': 'individual',
+                'to': TO,
+                'type': 'text',
+                'text': {'body': msg}
+            }
+            
+            session = Session()
+            session.headers.update(headers)
+            
+            print(f'\033[1;32;40mSending message to {i}...\033[0m')
+            response = session.post(URL, json=parameters)
+            data = json.loads(response.text)
+            
+            if response.status_code == 200:
+                success_count += 1
+                print(f'\033[1;32;40mMessage sent successfully to {i}\033[0m')
+            else:
+                failed_messages.append((i, response.status_code, data))
+                print(f'\033[1;31;40mFailed to send message to {i}. Status code: {response.status_code}\033[0m')
+                
+        except Exception as e:
+            failed_messages.append((i, 'Exception', str(e)))
+            print(f'\033[1;31;40mError sending message to {i}: {str(e)}\033[0m')
+    
+    # Print messaging summary
+    print(f'\n\033[1;32;40mMessaging Summary:\n'
+          f'Successfully sent: {success_count}/{len(dname_list)} messages\n'
+          f'Failed messages: {len(failed_messages)}\033[0m')
+    
+    if failed_messages:
+        print('\n\033[1;31;40mFailed Messages Details:')
+        for name, code, error in failed_messages:
+            print(f'- {name}: {code} - {error}\033[0m')
+    
+    return success_count == len(dname_list)
 
 def main():
     # Check if the Excel file exists before processing
@@ -212,6 +306,12 @@ def main():
                 summary_file.write(summary)
             print('\033[1;32;40mSummary saved to processing_summary.txt\033[0m')
 
+    # Replace the WhatsApp messaging section with:
+    if dname_list:
+        send_whatsapp_messages(dname_list, dnumber_list, config)
+    else:
+        print('\033[1;33;40mNo drivers to message\033[0m')
+
 # Edit Path 
 path = '/Users/krish/Documents/DreamSai/'
 # Edit Path ^
@@ -240,50 +340,6 @@ with open('test_csv.csv', 'r') as file:
             if dname not in dname_list:
                 dname_list.append(dname)
                 dnumber_list.append(dnumber)
-
-for i in dname_list:
-    fr = 'whatsapp:'+dnumber_list[dname_list.index(i)]
-    dname_file = i+'.txt'
-    with open(dname_file, 'r') as df:
-        msg = df.read()
-
-    BASE_URL = 'https://graph.facebook.com/'
-    API_VERSION = config['WHATSAPP']['api_version'] + '/'
-    SENDER = config['WHATSAPP']['sender_id'] + '/'
-    ENDPOINT = 'messages'
-    URL = BASE_URL + API_VERSION + SENDER + ENDPOINT
-    API_TOKEN = config['WHATSAPP']['api_token']
-    TO = dnumber_list[dname_list.index(i)]
-
-    headers = {
-        'Authorization': f'Bearer {API_TOKEN}',
-        'Content-Type': 'application/json'
-    }
-    parameters = {
-        'messaging_product': 'whatsapp',
-        'recipient_type': 'individual',
-        'to': TO,
-        'type': 'text',
-        'text': {'body':msg}
-    }
-    session = Session()
-    session.headers.update(headers)
-    try:
-        response = session.post(URL, json=parameters)
-        data = json.loads(response.text)
-        print('\033[1;32;40mSending Message to '+i+'...\n')
-        
-        # Add status check for the API response
-        if response.status_code != 200:
-            print(f'\033[1;31;40mError sending message to {i}. Status code: {response.status_code}')
-            print(f'Response: {data}\033[0m')
-    except (ConnectionError, Timeout, TooManyRedirects) as e:
-        print('\033[1;31;40mConnection Error:\n\n'+str(e)+'\033[0m')
-    except Exception as e:
-        print(f'\033[1;31;40mUnexpected error sending message to {i}:\n{str(e)}\033[0m')
-
-    
-os.remove('test_csv.csv')
 
 # Create a backup directory for the generated files
 backup_dir = path + 'backups/' + pendulum.now().format('YYYY-MM-DD_HH-mm-ss')
