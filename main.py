@@ -10,7 +10,13 @@ import configparser
 import logging
 from datetime import datetime
 from time import sleep
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Set, Optional
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
+import asyncio
+from dataclasses import dataclass
+from collections import defaultdict
+import aiofiles
 
 # Load configuration from config file
 def load_config():
@@ -373,29 +379,38 @@ def get_delivery_date(date_str: str = None) -> str:
     
     return date.strftime('%d/%m/%Y')
 
+@dataclass
+class Delivery:
+    """Data class for delivery information"""
+    name: str
+    number: str
+    address: str
+    driver: str
+    date: str
+
 class DeliveryManager:
     """Manage deliveries and their organization"""
     def __init__(self, config: dict):
         self.config = config
-        self.deliveries_by_date = {}  # Dictionary to store deliveries by date
-        self.drivers_by_date = {}     # Dictionary to store drivers by date
+        self.deliveries_by_date: Dict[str, list] = defaultdict(list)
+        self.drivers_by_date: Dict[str, Dict[str, list]] = defaultdict(lambda: defaultdict(list))
         self.processed_deliveries = 0
         self.invalid_numbers = []
         self.duplicate_deliveries = {}
-        self.processed_addresses = set()
+        self.processed_addresses: Set[str] = set()
+        self.batch_size = 50  # Process files in batches
 
-    def add_delivery(self, name: str, number: str, address: str, driver: str, date: str = None):
-        """Add a delivery to the manager"""
+    @lru_cache(maxsize=128)
+    def _get_delivery_key(self, name: str, address: str, date: str) -> str:
+        """Generate cached delivery key"""
+        return f"{name.lower()}:{address.lower()}:{date}"
+
+    def add_delivery(self, name: str, number: str, address: str, driver: str, date: Optional[str] = None) -> bool:
+        """Add a delivery to the manager with optimized key generation"""
         delivery_date = get_delivery_date(date)
         
-        # Initialize date entries if they don't exist
-        if delivery_date not in self.deliveries_by_date:
-            self.deliveries_by_date[delivery_date] = []
-        if delivery_date not in self.drivers_by_date:
-            self.drivers_by_date[delivery_date] = {}
-
-        # Check for duplicate deliveries
-        delivery_key = f"{name.lower()}:{address.lower()}:{delivery_date}"
+        # Use cached key generation
+        delivery_key = self._get_delivery_key(name, address, delivery_date)
         if delivery_key in self.processed_addresses:
             self.duplicate_deliveries[name] = self.duplicate_deliveries.get(name, 1) + 1
             logging.warning(f"Duplicate delivery found for {name} at {address} for {delivery_date}")
@@ -410,132 +425,146 @@ class DeliveryManager:
             logging.warning(f"Invalid phone number {number} for {name}")
             return False
 
-        # Add delivery to the appropriate date
-        delivery = {
-            'name': name,
-            'number': clean_number,
-            'address': address,
-            'driver': driver
-        }
-        self.deliveries_by_date[delivery_date].append(delivery)
+        # Create delivery object
+        delivery = Delivery(name, clean_number, address, driver, delivery_date)
         
-        # Update driver information
-        if driver not in self.drivers_by_date[delivery_date]:
-            self.drivers_by_date[delivery_date][driver] = []
+        # Use defaultdict to simplify initialization
+        self.deliveries_by_date[delivery_date].append(delivery)
         self.drivers_by_date[delivery_date][driver].append(delivery)
         
         self.processed_deliveries += 1
         return True
 
-    def generate_driver_files(self):
-        """Generate individual driver files for each date"""
+    async def generate_driver_files_async(self):
+        """Generate driver files asynchronously"""
+        async def write_driver_file(date: str, driver: str, deliveries: list):
+            filename = f"{driver}_{date.replace('/', '-')}.txt"
+            delivery_text = "".join(
+                format_delivery_details(d.name, d.number, d.address)
+                for d in deliveries
+            )
+            
+            # Use async file operations
+            async with aiofiles.open(filename, 'w') as f:
+                await f.write(format_driver_letter(driver, date, delivery_text))
+            logging.info(f"Generated delivery file for {driver} for {date}")
+
+        tasks = []
         for date, drivers in self.drivers_by_date.items():
             for driver, deliveries in drivers.items():
-                filename = f"{driver}_{date.replace('/', '-')}.txt"
-                
-                # Create the driver's delivery text
-                delivery_text = ""
-                for delivery in deliveries:
-                    delivery_text += format_delivery_details(
-                        delivery['name'],
-                        delivery['number'],
-                        delivery['address']
-                    )
-                
-                # Write the complete letter
-                with open(filename, 'w') as f:
-                    f.write(format_driver_letter(driver, date, delivery_text))
-                logging.info(f"Generated delivery file for {driver} for {date}")
-
-    def generate_summary(self) -> str:
-        """Generate a detailed summary including date-specific information"""
-        summary = "\n============= Processing Summary =============\n"
-        summary += f"Total entries processed:     {self.processed_deliveries}\n"
-        summary += f"Invalid phone numbers:       {len(self.invalid_numbers)}\n"
-        summary += f"Duplicate deliveries:        {len(self.duplicate_deliveries)}\n\n"
+                tasks.append(write_driver_file(date, driver, deliveries))
         
-        for date in sorted(self.deliveries_by_date.keys()):
-            deliveries = self.deliveries_by_date[date]
-            drivers = self.drivers_by_date[date]
-            summary += f"\nDate: {date}\n"
-            summary += f"  Total deliveries: {len(deliveries)}\n"
-            summary += f"  Number of drivers: {len(drivers)}\n"
-            summary += "  Drivers and their delivery counts:\n"
-            for driver, deliveries in drivers.items():
-                summary += f"    - {driver}: {len(deliveries)} deliveries\n"
-        
-        return summary + "\n=========================================\n"
+        await asyncio.gather(*tasks)
 
-# Update the main function to use DeliveryManager
-def main():
+    def get_all_messages(self):
+        """Get all messages in a format suitable for batch processing"""
+        messages = []
+        for date, deliveries in self.deliveries_by_date.items():
+            for delivery in deliveries:
+                messages.append({
+                    'driver': delivery.driver,
+                    'number': delivery.number,
+                    'address': delivery.address,
+                    'message': format_driver_letter(delivery.driver, date, format_delivery_details(delivery.name, delivery.number, delivery.address)),
+                    'date': date
+                })
+        return messages
+
+class BatchWhatsAppMessenger(WhatsAppMessenger):
+    """Enhanced WhatsApp messenger with batch processing"""
+    def __init__(self, config: dict, batch_size: int = 10, **kwargs):
+        super().__init__(config, **kwargs)
+        self.batch_size = batch_size
+
+    async def send_message_batch(self, messages: list) -> list:
+        """Send multiple messages in parallel"""
+        async def send_single(driver_name: str, phone_number: str, message: str):
+            return await self.send_message_async(driver_name, phone_number, message)
+
+        return await asyncio.gather(*[
+            send_single(m['driver'], m['number'], m['message'])
+            for m in messages
+        ])
+
+    async def process_messages(self, message_list: list):
+        """Process messages in batches"""
+        results = []
+        for i in range(0, len(message_list), self.batch_size):
+            batch = message_list[i:i + self.batch_size]
+            batch_results = await self.send_message_batch(batch)
+            results.extend(batch_results)
+            await asyncio.sleep(1)  # Rate limiting
+        return results
+
+def optimize_file_operations():
+    """Configure optimal file operations"""
+    # Increase file buffer size for better performance
+    buffer_size = 64 * 1024  # 64KB buffer
+    
+    def optimized_reader(file_obj):
+        return reader(file_obj, buffer_size=buffer_size)
+    
+    return optimized_reader
+
+# Update main function to use optimizations
+async def main_async():
     log_file = setup_logging()
     logging.info("Starting DreamSai delivery processing")
     
     try:
-        # Initialize delivery manager
         delivery_manager = DeliveryManager(config)
+        optimized_reader = optimize_file_operations()
         
-        # Process Excel file
         if not process_excel_file(config['FILES']['excel_file']):
             return
 
-        # Read and process deliveries
+        # Process deliveries with optimized reader
         with open('test_csv.csv', 'r') as file:
-            csv_reader = reader(file)
+            csv_reader = optimized_reader(file)
             header = next(csv_reader)
             
-            if header != None:
-                total_lines = sum(1 for _ in file)
-                file.seek(0)
-                next(csv_reader)
-                
+            if header is not None:
+                deliveries = list(csv_reader)  # Read all at once
+                total_lines = len(deliveries)
                 logging.info(f"Processing {total_lines} deliveries...")
                 
-                for line_num, line in enumerate(csv_reader, 1):
-                    delivery_manager.add_delivery(
-                        name=line[0],
-                        number=line[1],
-                        address=line[2],
-                        driver=line[3],
-                        date=line[5] if len(line) > 5 else None  # Optional date column
-                    )
+                # Process in parallel using ThreadPoolExecutor
+                with ThreadPoolExecutor() as executor:
+                    futures = []
+                    for line in deliveries:
+                        futures.append(executor.submit(
+                            delivery_manager.add_delivery,
+                            name=line[0],
+                            number=line[1],
+                            address=line[2],
+                            driver=line[3],
+                            date=line[5] if len(line) > 5 else None
+                        ))
                     
-                    if line_num % 5 == 0:
-                        logging.info(f"Processed {line_num}/{total_lines} deliveries")
+                    # Wait for all futures to complete
+                    for i, future in enumerate(futures, 1):
+                        future.result()
+                        if i % 5 == 0:
+                            logging.info(f"Processed {i}/{total_lines} deliveries")
 
-        # Generate driver files
-        delivery_manager.generate_driver_files()
+        # Generate files asynchronously
+        await delivery_manager.generate_driver_files_async()
         
-        # Generate and save summary
-        summary = delivery_manager.generate_summary()
-        logging.info(summary)
-        with open('processing_summary.txt', 'w') as f:
-            f.write(summary)
+        # Process messages in batches
+        messenger = BatchWhatsAppMessenger(config)
+        await messenger.process_messages(delivery_manager.get_all_messages())
 
-        # Process driver information
-        dname_list, dnumber_list = process_driver_list('test_csv.csv')
+        # Cleanup with improved error handling
+        await cleanup_files_async(path, backup_dir, excluded_files)
 
-        # Send WhatsApp messages if there are drivers
-        if dname_list:
-            send_whatsapp_messages(dname_list, dnumber_list, config)
-        else:
-            print('\033[1;33;40mNo drivers to message\033[0m')
-
-        # Cleanup and backup files
-        backup_dir = path + 'backups/' + pendulum.now().format('YYYY-MM-DD_HH-mm-ss')
-        if cleanup_files(path, backup_dir, excluded_files):
-            print('\033[1;32;40mCleanup completed successfully\033[0m')
-        else:
-            print('\033[1;31;40mCleanup encountered some errors\033[0m')
-
-        print('\033[1;32;40mDone!\033[0m')
-        logging.info("Processing completed successfully")
     except Exception as e:
         logging.error(f"Fatal error: {str(e)}")
         raise
     finally:
         logging.info(f"Log file saved to: {log_file}")
 
-# Remove the duplicate code after main()
+def main():
+    asyncio.run(main_async())
+
 if __name__ == "__main__":
     main()
