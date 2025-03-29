@@ -134,14 +134,31 @@ for i in dname_list:
     
 os.remove('test_csv.csv')
 
+# Create a backup directory for the generated files
+backup_dir = path + 'backups/' + pendulum.now().format('YYYY-MM-DD_HH-mm-ss')
+if not exists(backup_dir):
+    os.makedirs(backup_dir)
+    print(f'\033[1;32;40mCreating backup directory: {backup_dir}\033[0m')
+
+# Get list of files to be deleted
 list = os.listdir(path)
 list.remove('requirements.txt')
 list.remove('test.xlsx')
 list.remove('main.py')
 list.remove('instructions.txt')
+if 'backups' in list:
+    list.remove('backups')
 
+# Backup files before deletion
 for i in list:
-    fpath = path+i
+    fpath = path + i
+    backup_path = backup_dir + '/' + i
+    try:
+        with open(fpath, 'r') as src_file, open(backup_path, 'w') as backup_file:
+            backup_file.write(src_file.read())
+        print(f'\033[1;32;40mBacked up: {i}\033[0m')
+    except Exception as e:
+        print(f'\033[1;31;40mFailed to backup {i}: {str(e)}\033[0m')
     os.remove(fpath)
 
 print('\033[1;32;40mDone!')
