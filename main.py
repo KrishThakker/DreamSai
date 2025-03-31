@@ -31,8 +31,8 @@ def load_config():
         }
         config['WHATSAPP'] = {
             'api_version': 'v13.0',
-            'sender_id': '110575298428506',
-            'api_token': 'EAAGJasZAx3KMBAFdR6v3q403r08XyZBvmFg1sHr7DYoxZBsItZAKOJoLjBsuX8mqg1zlZBunamhHeN5A5JiWq9EJWhKekD94m4w6VAATkoBypoRPnj8c0FBMaDC1MoJYNoZAhZBFf1JZA2UX7b2jkr17GpFHGpPoDLAdfVZA3QJsZBAPuDZCxdCI1J9sOIM2wPjGjIe9kDhxrcA0gZDZD'
+            'sender_id': 'YOUR_SENDER_ID_HERE',
+            'api_token': 'YOUR_API_TOKEN_HERE'
         }
         config['FILES'] = {
             'excel_file': 'test.xlsx',
